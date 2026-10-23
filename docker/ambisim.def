@@ -1,0 +1,35 @@
+# Apptainer/Singularity equivalent of ./Dockerfile (same base image, packages, commit and build steps)
+# build:  apptainer build --fakeroot ambisim.sif ambisim.def
+# run:    apptainer run ambisim.sif --help
+Bootstrap: docker
+From: ubuntu:22.04
+
+%arguments
+    AMBISIM_COMMIT=8bf86c81b83ffecc86c5b85aab27ff7692962712
+
+%post
+    # apt's privilege-dropping sandbox fails under unprivileged --fakeroot (no subuid map); harmless in a build
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99sandbox
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential git ca-certificates autoconf automake \
+        zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libdeflate-dev libssl-dev
+    git clone https://github.com/marcalva/ambisim.git /opt/ambisim
+    cd /opt/ambisim
+    git checkout {{ AMBISIM_COMMIT }}
+    make hts
+    make
+    cp /opt/ambisim/ambisim /usr/local/bin/ambisim
+    rm -rf /opt/ambisim
+    apt-get purge -y build-essential git autoconf automake
+    apt-get autoremove -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        zlib1g libbz2-1.0 liblzma5 libcurl4 libdeflate0
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    exec /usr/local/bin/ambisim "$@"
+
+%labels
+    source https://github.com/marcalva/ambisim
+    commit 8bf86c81b83ffecc86c5b85aab27ff7692962712
