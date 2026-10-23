@@ -1,0 +1,4 @@
+# written by run_example.sh / get_fasta.sh
+data/chr22.fa
+data/chr22.fa.fai
+out/

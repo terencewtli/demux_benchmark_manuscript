@@ -1,0 +1,218 @@
+#!/usr/bin/env Rscript
+
+# generate random BC file
+#
+# Argument 1: File containing RNA barcodes
+#
+# Argument 2: File containing ATAC barcodes, corresponding to RNA.
+#
+# Argument 3: File with sample IDs in the first column and proportions in
+#  the second column. No header.
+#
+# Argument 4: File with cell type indices in the first column and
+#  proportions in the second column. No header.
+#
+# Argument 5: random seed number. 0 for NULL to obtain a different output for
+#  each run.
+#
+# Argument 6: Output file name.
+#
+# Argument 7: Ambient proportion setting: 0, 10, 20, 30, 40 or 50 (mean % of
+#  reads per nucleus that come from the ambient pool).
+#
+# Argument 8: Doublet rate in percent (e.g. 10).
+#
+# Arguments 9-11 (optional, added for the small example; defaults reproduce
+#  the paper): number of nucleus-containing droplets [9000], number of empty
+#  droplets [all remaining whitelist barcodes], median reads per nucleus per
+#  modality [20000].
+#
+# This is the script used for the paper's simulations
+# (scripts/ambisim/cov_doub_test), with arguments 9-11 added and the ATAC
+# columns written in the format ambisim reads: reads from the nucleus inside
+# peaks, ambient inside peaks, nucleus outside peaks, ambient outside peaks.
+# (The paper's version wrote nucleus total, ambient total, nucleus in-peak,
+# ambient in-peak, which ambisim read as the four columns above.)
+
+#===============================================================================
+# parameters
+#===============================================================================
+
+# n_nuc <- 3e3 # num. of droplets with nuclei
+n_nuc <- 9e3 # num. of droplets with nuclei
+# dbl_rate <- 0.2 # proportion of nuclei that are doublets
+dbl_rate <- 0.1 # proportion of nuclei that are doublets
+# log normal for read depth
+cell_reads_lmean <- log(2e4)
+cell_reads_lsd <- log(2)
+# minimum num. of reads in a cell-containing barcode
+min_cell_reads <- 200
+# log normal for read depth
+ambn_reads_lmean <- 0.1
+ambn_reads_lsd <- 1
+
+# beta parameters for FRIP in cell
+frip_cell_s1 <- 4
+frip_cell_s2 <- 6
+# beta parameters for FRIP in ambient pool
+frip_ambn_s1 <- 1
+frip_ambn_s2 <- 9
+
+#===============================================================================
+#===============================================================================
+
+args <- commandArgs(trailingOnly = TRUE)
+
+if (length(args) < 6)
+    stop("arguments are required")
+
+rna_wl_bc_fn <- args[1]
+atac_wl_bc_fn <- args[2]
+sample_fn <- args[3]
+ct_fn <- args[4]
+seedn <- as.numeric(args[5])
+if (seedn == 0) seedn <- NULL
+out_fn <- args[6]
+
+### customize alpha and dbl rate
+prop <- args[7]
+dbl_rate <- as.double(args[8]) / 100
+if (length(args) >= 9) n_nuc <- as.integer(args[9])
+if (length(args) >= 11) cell_reads_lmean <- log(as.double(args[11]))
+
+# alphas <- c(1,2,2,2,4)
+# betas <- c(1,38,18,8,4)
+
+### 0%, 10%, 20%, 30%, 40%, 50%
+### fixing alpha + beta = 10
+alphas <- c(0,2,2,3,4,5)
+betas <- c(0,18,8,7,6,5)
+prop_rows <- c(0,10,20,30,40,50)
+
+alpha_df <- data.frame(row.names=prop_rows,
+                       one=alphas,
+                       two=betas)
+
+alpha_s1 <-  alpha_df[prop,]$one
+alpha_s2 <-  alpha_df[prop,]$two
+
+# dbl_rate <- as.double(args[8]) / 100
+
+rna_wl_bcs <- readLines(rna_wl_bc_fn)
+rna_wl_bcs <- sapply(rna_wl_bcs, function(x) substring(x, 1, 16))
+rna_wl_bcs <- unname(rna_wl_bcs)
+
+atac_wl_bcs <- readLines(atac_wl_bc_fn)
+atac_wl_bcs <- sapply(atac_wl_bcs, function(x) substring(x, 1, 16))
+atac_wl_bcs <- unname(atac_wl_bcs)
+
+samples <- read.table(sample_fn, header = FALSE, row.names = 1)
+cts <- read.table(ct_fn, header = FALSE, row.names = 1)
+n_cts <- nrow(cts)
+
+wl_bcs <- data.frame("RNA_BC" = rna_wl_bcs, "ATAC_BC" = atac_wl_bcs)
+
+n_amb <- nrow(wl_bcs) - n_nuc
+if (length(args) >= 10) n_amb <- as.integer(args[10])
+wl_bcs <- wl_bcs[seq_len(n_nuc + n_amb), ]
+
+n_dbl <- floor(dbl_rate * n_nuc)
+n_sng <- n_nuc - n_dbl
+
+set.seed(seedn)
+
+gen_bc <- function(n, rmin, rmax) {
+    # get sample and cell type IDs
+    sam <- 0
+    ct <- 0
+    if (n == 0) {
+        sam <- "NA"
+        ct <- "NA"
+    } else if (n == 1) {
+        sam <- sample(rownames(samples), size = 1, prob = samples[, 1])
+        ct <- sample(rownames(cts), size = 1, prob = cts[, 1])
+    } else {
+        # doublets are always heterotypic
+        sam <- sample(rownames(samples), size = 1, prob = samples[, 1])
+        sam_db <- samples[rownames(samples) != sam, , drop = FALSE]
+        sam2 <- sample(rownames(sam_db), size = 1, prob = sam_db[, 1])
+        sam <- paste(sam, sam2, sep = ",")
+        ct <- sample(rownames(cts), size = 1, prob = cts[, 1])
+        cts_db <- cts[rownames(cts) != ct, , drop = FALSE]
+        ct2 <- sample(rownames(cts_db), size = 1, prob = cts_db[, 1])
+        ct <- paste(ct, ct2, sep = ",")
+    }
+
+    # get read numbers
+    if (n > 0) {
+        n_rna_tot <- rlnorm(1, mean = cell_reads_lmean,
+                            sd = cell_reads_lsd)
+        n_rna_tot <- round(n_rna_tot) + min_cell_reads
+        rna_alpha <- 0
+        if (alpha_s1 > 0) {
+          rna_alpha <- rbeta(1, shape1 = alpha_s1, shape2 = alpha_s2)
+        }
+        rna_nr_a <- round(n_rna_tot * rna_alpha)
+        rna_nr_c <- n_rna_tot - rna_nr_a
+
+        n_atac_tot <- rlnorm(1, mean = cell_reads_lmean,
+                             sd = cell_reads_lsd)
+        n_atac_tot <- round(n_atac_tot) + min_cell_reads
+        # atac_alpha <- rbeta(1, shape1 = alpha_s1, shape2 = alpha_s2)
+        atac_alpha <- 0
+        if (alpha_s1 > 0) {
+          atac_alpha <- rbeta(1, shape1 = alpha_s1, shape2 = alpha_s2)
+        }
+        atac_nr_a <- round(n_atac_tot * atac_alpha)
+        atac_nr_c <- n_atac_tot - atac_nr_a
+
+        atac_frip_c <- rbeta(1, shape1 = frip_cell_s1,
+                                  shape2 = frip_cell_s2)
+        atac_frip_a <- rbeta(1, shape1 = frip_ambn_s1,
+                                  shape2 = frip_ambn_s2)
+        atac_nr_cp <- round(atac_nr_c * atac_frip_c)
+        atac_nr_ap <- round(atac_nr_a * atac_frip_a)
+    } else {
+        n_rna_tot <- rlnorm(1, mean = ambn_reads_lmean,
+                            sd = ambn_reads_lsd)
+        n_rna_tot <- round(n_rna_tot)
+        rna_nr_a <- n_rna_tot
+        rna_nr_c <- 0
+
+        n_atac_tot <- rlnorm(1, mean = ambn_reads_lmean,
+                             sd = ambn_reads_lsd)
+        n_atac_tot <- round(n_atac_tot)
+        atac_nr_a <- n_atac_tot
+        atac_nr_c <- 0
+        atac_frip_a <- rbeta(1, shape1 = frip_ambn_s1,
+                                  shape2 = frip_ambn_s2)
+        atac_nr_ap <- round(atac_nr_a * atac_frip_a)
+        atac_nr_cp <- 0
+    }
+
+    atac_nr_c_ip <- atac_nr_cp
+    atac_nr_a_ip <- atac_nr_ap
+    atac_nr_c_op <- atac_nr_c - atac_nr_cp
+    atac_nr_a_op <- atac_nr_a - atac_nr_ap
+    datf <- data.frame(n, sam, ct, rna_nr_c, rna_nr_a,
+                       atac_nr_c_ip, atac_nr_a_ip, atac_nr_c_op, atac_nr_a_op)
+    return(datf)
+}
+
+sngs <- lapply(seq_len(n_sng), function(x) {
+              gen_bc(1, cell_reads_shape, cell_reads_scale) })
+sngs <- do.call(rbind, sngs)
+
+dbls <- lapply(seq_len(n_dbl), function(x) {
+              gen_bc(2, cell_reads_shape, cell_reads_scale) })
+dbls <- do.call(rbind, dbls)
+
+ambns <- lapply(seq_len(n_amb), function(x) {
+              gen_bc(0, ambn_reads_shape, ambn_reads_scale) })
+ambns <- do.call(rbind, ambns)
+
+datf <- do.call(rbind, list(sngs, dbls, ambns))
+datf <- cbind(wl_bcs, datf)
+
+write.table(datf, out_fn, row.names = FALSE,
+            col.names = TRUE, quote = FALSE, sep = "\t")

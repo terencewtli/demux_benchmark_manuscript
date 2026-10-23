@@ -1,0 +1,5 @@
+# reference run of the example (ambisim --seed 1); md5 of decompressed FASTQ for information only
+RNA	1388556
+# RNA_R1_md5 79424ebb031e2002113165c4e4b360ef
+ATAC	1372894
+# ATAC_R1_md5 d9cab48aeb6aeccf8af2fd6a0f8218c5
