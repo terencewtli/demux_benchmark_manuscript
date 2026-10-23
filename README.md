@@ -20,3 +20,7 @@ bioRxiv:
 | `example/` | An example of running ambisim on a toy example. |
 | `ipynb/` | Jupyter notebooks used to process data and produce figures. |
 | `scripts` | Bash scripts, primarily used for running ambisim and genotype-based demultiplexing methods. |
+
+## Variant consistency
+
+See [https://github.com/terencewtli/variant_consistency](https://github.com/terencewtli/variant_consistency) for details.
